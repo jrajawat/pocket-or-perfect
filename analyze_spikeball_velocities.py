@@ -18,7 +18,7 @@ BALL_CIRCUMFERENCE_M = 0.3048          # 12 in
 BALL_RADIUS_M = BALL_CIRCUMFERENCE_M / (2.0 * math.pi)
 
 # Global scale from shallow1
-GLOBAL_M_PER_PX = 0.000562640408378087
+GLOBAL_M_PER_PX = 0.0005627249736020139
 
 
 def load_centers_csv(path):
@@ -77,19 +77,32 @@ def filter_by_radius_band(frame_idx, cx, cy, radius, lower_ratio=0.5, upper_rati
 
 def estimate_scale_m_per_px(radius_px):
     """
-    Estimate meters per pixel from radius in pixels.
-    If no valid radii, fall back to global scale.
+    Hybrid scaling:
+      - If per-shot radius is plausible and consistent, use per-shot scale.
+      - Otherwise, fall back to global scale.
     """
+
     valid = radius_px[~np.isnan(radius_px)]
-    if valid.size == 0:
-        # fallback to global constant
-        if GLOBAL_M_PER_PX is None:
-            raise ValueError("No valid radius values and GLOBAL_M_PER_PX not set.")
-        print("Using global scale here.")
+    if valid.size < 4:
+        # too few detections → fallback
         return GLOBAL_M_PER_PX
 
-    r_px_mean = np.mean(valid)
-    return BALL_RADIUS_M / r_px_mean
+    med = np.median(valid)
+    std = np.std(valid)
+
+    print(med)
+    # Check plausible radius range
+    if med < 55 or med > 140:
+        print("Using global scale here. OUT OF RANGE")
+        return GLOBAL_M_PER_PX
+
+    # Check consistency
+    if std > 20:
+        print("Using global scale here. INCONSISTENT")
+        return GLOBAL_M_PER_PX
+
+    # If all good: use per-shot scale
+    return BALL_RADIUS_M / med
 
 
 def find_impact_pos(cy_px):
