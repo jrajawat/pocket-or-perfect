@@ -12,8 +12,6 @@ It automatically measures:
 - Spin vs time plots with impact markers  
 - Summary CSVs combining all velocity and spin data  
 
-Everything is modular and supports batch processing.
-
 ---
 
 # 1. Project Structure
@@ -25,7 +23,7 @@ bme-spikeball-550/
 ├── analyze_spikeball_velocities.py  # Compute inbound/outbound velocities
 ├── estimate_spin.py                 # Stripe tracking + spin computation
 │
-├── batch_detect_centers.py          # Batch: centers, mask, debug
+├── batch_estimate_speed.py          # Batch: centers, mask, debug
 ├── batch_estimate_spin.py           # Batch: spin CSVs + plots
 │
 ├── Shallow/                         # Raw videos
@@ -159,7 +157,7 @@ For each frame:
 
 ### Detect centers for all shots:
 ```bash
-python batch_detect_centers.py
+python batch_estimate_speed.py
 ```
 
 Produces:
@@ -228,8 +226,8 @@ Increase:
 
 This system provides:
 
-- Reliable Spikeball tracking  
-- Accurate inbound and outbound velocity  
+- Spikeball tracking  
+- Inbound and outbound velocity  
 - Stripe based spin measurement using PCA + clustering  
 - Automated processing across all shots  
 - Final combined velocity + spin dataset
