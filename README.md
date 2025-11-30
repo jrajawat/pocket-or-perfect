@@ -1,151 +1,131 @@
-Pocket or Perfect? The Mechanics of a Spikeball Rebound
-Spikeball Trajectory + Spin Analysis Pipeline
+# Pocket or Perfect? The Mechanics of a Spikeball Rebound
+## Spikeball Trajectory + Spin Analysis Pipeline
 
-This project provides an end-to-end pipeline for analyzing Spikeball shots from high-speed video.
-It extracts:
+This project provides an end to end system for analyzing Spikeball shots from high speed video.  
+It automatically measures:
 
-Ball centers per frame
+- Ball centers per frame  
+- Inbound and outbound velocity (components, magnitude, elevation angle)  
+- Spin rate (rad/s)  
+- Mask videos showing yellow detection  
+- Debug videos showing circle overlays  
+- Spin vs time plots with impact markers  
+- Summary CSVs combining all velocity and spin data  
 
-Inbound and outbound velocity (magnitude + components + elevation angle)
+Everything is modular and supports batch processing.
 
-Spin rate (rad/s)
+---
 
-Mask videos showing the yellow-range detection
+# 1. Project Structure
 
-Debug videos showing detected circles
-
-Spin-vs-time plots with impact markers
-
-Summary CSVs with velocity + spin per shot
-
-The workflow is fully automated through batch scripts and modular processing tools.
-
-1. Project Structure
+```
 bme-spikeball-550/
 │
-├── detect_spikeball.py          # Detect ball centers in each video
-├── analyze_spikeball_velocities.py
-├── estimate_spin.py             # Extract stripe orientation + spin
-├── batch_detect_centers.py      # Process all videos for centers
-├── batch_estimate_spin.py       # Process all videos for spin
+├── detect_spikeball.py              # Detect ball centers per frame
+├── analyze_spikeball_velocities.py  # Compute inbound/outbound velocities
+├── estimate_spin.py                 # Stripe tracking + spin computation
 │
-├── Shallow/                     # Raw videos for Shallow shots
-├── Oblique/                     # Raw videos for Oblique shots
-├── Pocket/                      # Raw videos for Pocket shots
+├── batch_detect_centers.py          # Batch: centers, mask, debug
+├── batch_estimate_spin.py           # Batch: spin CSVs + plots
+│
+├── Shallow/                         # Raw videos
+├── Oblique/
+├── Pocket/
 │
 └── outputs/
     ├── Shallow/
-    │   ├── centers/             # per-frame center CSVs
-    │   ├── mask/                # mask MP4s (yellow segmentation)
-    │   ├── debug/               # debug MP4s (circle overlays)
-    │   └── spin/                # spin CSVs + PNGs
+    │   ├── centers/                 # cx_px, cy_px, radius_px
+    │   ├── mask/                    # yellow mask videos
+    │   ├── debug/                   # circle overlay videos
+    │   └── spin/                    # spin CSVs + spin plots
     │
     ├── Oblique/
     └── Pocket/
+```
 
+---
 
-2. Libraries Used
-Purpose	Library
-Video I/O, image processing	OpenCV (cv2)
-Math, numeric operations	NumPy, SciPy
-Data tables	Pandas
-Clustering edges for stripe detection	sklearn (DBSCAN)
-Smoothing (median filters)	SciPy ndimage
-Plotting spin curves	Matplotlib
+# 2. Libraries Used
 
-You must use a SciPy/NumPy/Sklearn combination that matches versions.
-This project currently uses:
+| Purpose | Library |
+|--------|---------|
+| Video and image processing | OpenCV (cv2) |
+| Numeric computation | NumPy |
+| Scientific functions | SciPy |
+| Data tables | Pandas |
+| Stripe clustering | scikit-learn (DBSCAN) |
+| Smoothing filters | SciPy ndimage |
+| Plotting | Matplotlib |
 
-numpy 1.26.x
+### Recommended versions  
+These versions are compatible with one another:
 
-scipy 1.10.x
+- numpy 1.26.x  
+- scipy 1.10.x  
+- scikit-learn 1.3.x  
 
-scikit-learn 1.3.x
+---
 
-3. Step 1 — Detecting Ball Centers
-Command (single shot)
+# 3. Step 1 — Detecting Ball Centers
+
+### Single-shot example:
+```bash
 python detect_spikeball.py Shallow/shallow1.mp4 \
     --ball-radius-px 80 \
     --radius-tol-px 20 \
     --output outputs/Shallow/centers/shallow1_centers.csv \
     --save-mask-video outputs/Shallow/mask/shallow1_mask.mp4 \
     --save-debug-video outputs/Shallow/debug/shallow1_debug.mp4
+```
 
-How it works
+### How center detection works
+1. Convert frame to HSV  
+2. Mask pixels within a calibrated yellow hue range  
+3. Extract contours  
+4. Filter by area, circularity, and radius tolerance  
+5. Track the nearest center between frames  
+6. Save per-frame output:
+   - `cx_px`
+   - `cy_px`
+   - `radius_px`
 
-Convert each frame to HSV
+### Output files
+- **Mask video** — shows the binary segmentation used for detection  
+- **Debug video** — shows detected circle outlines  
 
-Mask pixels within a yellow hue range
+---
 
-Apply contour segmentation
+# 4. Step 2 — Computing Velocities
 
-Filter contours by:
-
-area
-
-circularity
-
-radius tolerance
-
-Use continuity tracking (nearest center to previous frame)
-
-Save:
-
-cx_px, cy_px — ball center in pixels
-
-radius_px — estimated pixel radius
-
-Output Files
-Mask video (mask/*.mp4)
-
-Shows the binary yellow segmentation used to see if detection is clean.
-
-Debug video (debug/*.mp4)
-
-Shows the ball outline every frame — useful for validating tracking.
-
-4. Step 2 — Converting Pixel Motion to Velocities
-
-Once center CSVs exist, run:
-
+Run:
+```bash
 python analyze_spikeball_velocities.py
+```
 
+### How velocities are computed
+1. Convert pixel motion to meters using a global `m_per_px`
+2. Compute that scale using the known circumference of a Spikeball  
+3. Fit a linear model to:
+   - pre impact frames → inbound velocity  
+   - post impact frames → outbound velocity  
+4. Compute:
+   - vx_in_mps, vy_in_mps  
+   - speed_in_mps  
+   - elev_in_deg  
+   - and the same for outbound
 
-This script processes all center CSVs to generate velocities and impact frames.
+### Output
+`outputs/spikeball_velocity_summary.csv`  
+(one row per shot)
 
-How velocities are computed
+---
 
-Convert pixel centers → meters
+# 5. Step 3 — Estimating Spin From Stripes
 
-Compute a global meters-per-pixel scale using the measured circumference of a Spikeball.
+The ball must have black stripes drawn on it, similar to the golf lab spin experiment.
 
-This ensures radius errors do not destroy velocity values.
-
-Fit a linear model to center position vs time for:
-
-Frames before impact → inbound velocity
-
-Frames after impact → outbound velocity
-
-Compute:
-
-vx_in_mps, vy_in_mps
-
-speed_in_mps
-
-elev_in_deg (elevation angle)
-
-same for outbound
-
-Save one row per shot in:
-
-outputs/spikeball_velocity_summary.csv
-
-5. Step 3 — Extracting Stripe Orientation & Spin
-
-To compute spin, the ball must have dark stripes drawn on it (like the golf lab).
-
-Command (single shot)
+### Single-shot example:
+```bash
 python estimate_spin.py Shallow/shallow1.mp4 \
     outputs/Shallow/centers/shallow1_centers.csv \
     --fps 240 \
@@ -153,121 +133,103 @@ python estimate_spin.py Shallow/shallow1.mp4 \
     --out-plot outputs/Shallow/spin/shallow1_spin.png \
     --summary-csv outputs/spikeball_velocity_summary.csv \
     --shot-name shallow1_centers
+```
 
-How spin estimation works
+### How spin is computed
+For each frame:
+1. Crop a patch around the ball  
+2. Detect edges using Canny  
+3. Cluster edges using DBSCAN  
+4. Run PCA on the dominant cluster to estimate stripe orientation  
+5. Account for the 180° symmetry (orientation modulo π)  
+6. Compute spin:
+   ```
+   spin = dθ/dt
+   ```
+7. Smooth both the angle trace and spin trace  
+8. Identify spin before and after impact
 
-For each frame where the ball is detected:
+### Outputs
+- **Spin CSV**: frame_idx, theta_rad, omega_rad_s  
+- **Spin Plot**: includes a red dashed impact marker + label
 
-Crop a patch around the ball
+---
 
-Detect edge points inside the ball using Canny
+# 6. Batch Processing
 
-Cluster the edge points using DBSCAN
+### Detect centers for all shots:
+```bash
+python batch_detect_centers.py
+```
 
-Run PCA on the largest consistent cluster
+Produces:
+```
+outputs/<Group>/centers/
+outputs/<Group>/mask/
+outputs/<Group>/debug/
+```
 
-Extract the principal orientation angle
-
-Unwrap orientation modulo π (stripes repeat every 180 degrees)
-
-Compute dθ/dt → spin rate (rad/s)
-
-Smooth both:
-
-angle trace
-
-spin trace
-
-Output Files
-Spin CSV
-
-frame_idx, theta_rad, omega_rad_s
-
-Spin Plot PNG
-
-Shows:
-
-Spin vs frame
-
-Red dashed line marking impact
-
-Text label “Impact” above the line
-
-Plot title showing shot name (“Shallow1 Spin vs Frame”)
-
-6. Step 4 — Batch Processing
-
-You can run center detection for all 15 videos with:
-
-python batch_estimate_speed.py
-
-
-This script:
-
-Iterates through all Shallow / Oblique / Pocket folders
-
-Generates centers CSVs
-
-Saves mask and debug videos in the right folders
-
-Then generate spin for all shots:
-
+### Compute spin for all shots:
+```bash
 python batch_estimate_spin.py
+```
 
+Produces:
+```
+outputs/<Group>/spin/*.csv
+outputs/<Group>/spin/*.png
+```
 
-This script:
+Also updates:
+```
+spikeball_velocity_summary.csv
+```
 
-Reads all center CSVs
+with:
+- spin_in_rad_s  
+- spin_out_rad_s  
 
-Creates spin CSVs + PNGs
+---
 
-Updates the velocity summary CSV with spin-in and spin-out values
+# 7. Spin In and Spin Out
 
-7. What “Spin In” and “Spin Out” Mean
+Matches golf-ball tracking convention:
 
-We mimic the golf ball trackman convention:
+| Name | Meaning |
+|------|---------|
+| **Spin In** | average spin across frames before impact |
+| **Spin Out** | average spin across frames after impact |
 
-Spin In: average spin measured on frames before impact
+Impact frame comes from the velocity script.
 
-Spin Out: average spin measured on frames after impact
+---
 
-Each shot now contains:
+# 8. Troubleshooting
 
-spin_in_rad_s
-spin_out_rad_s
+### Mask has too many blobs  
+Adjust the HSV yellow thresholds.
 
+### Circle detection looks wrong  
+Tune:
+- `--ball-radius-px`
+- `--radius-tol-px`
 
-8. Troubleshooting
-Mask shows many noisy blobs
+### Spin = zero  
+Stripe was not visible or DBSCAN didn’t find enough edge points.
 
-→ Adjust HSV yellow range.
+### Spin plot is noisy  
+Increase:
+- angle_smooth_window  
+- spin_smooth_window  
 
-Debug shows wrong circle radius
+---
 
-→ Adjust --ball-radius-px and --radius-tol-px.
+# 9. Summary
 
-Spin = zero for a shot
+This system provides:
 
-→ Stripe wasn’t visible or DBSCAN didn’t find a dominant cluster.
-
-Hyper-spiky spin plot
-
-→ Increase smoothing windows in estimate_spin.py:
-
-angle_smooth_window
-
-spin_smooth_window
-
-9. Summary
-
-This pipeline allows fully automated Spikeball biomechanics analysis:
-
-Ball tracking (mask + debug video validation)
-
-Accurate inbound/outbound velocity measurement
-
-Spin estimation from stripe orientation
-
-Automated batch processing for full datasets
-
-Consistent structured output for analysis and reporting
+- Reliable Spikeball tracking  
+- Accurate inbound and outbound velocity  
+- Stripe based spin measurement using PCA + clustering  
+- Automated processing across all shots  
+- Final combined velocity + spin dataset
