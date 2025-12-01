@@ -6,17 +6,17 @@ inbound values and shot type (group), using the Spikeball summary CSV.
 Inputs:
     outputs/spikeball_velocity_summary.csv
 
-Outputs:
-    - outputs/speed_pred_vs_actual.png
-    - outputs/spin_pred_vs_actual.png (if spin data present)
-    - outputs/speed_in_vs_out_with_model.png
-    - outputs/spin_in_vs_out_with_model.png (if spin data present)
-    - outputs/speed_pred_vs_actual_by_group.png
-    - outputs/spin_pred_vs_actual_by_group.png (if spin data present)
+Outputs (all under outputs/model_plots/):
+    - speed_pred_vs_actual.png
+    - spin_pred_vs_actual.png (if spin data present)
+    - speed_in_vs_out_with_model.png
+    - spin_in_vs_out_with_model.png (if spin data present)
+    - speed_pred_vs_actual_by_group.png
+    - spin_pred_vs_actual_by_group.png (if spin data present)
 
 Console:
     - Prints regression equations and R^2
-    - Interactive prompt to predict outbound speed/spin for a given
+    - Interactive prompt to predict outbound speed or spin for a given
       inbound value and shot type.
 """
 
@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 
 BASE_OUTPUT = Path("outputs")
+MODEL_PLOTS = BASE_OUTPUT / "model_plots"
 SUMMARY_CSV = BASE_OUTPUT / "spikeball_velocity_summary.csv"
 
 
@@ -44,7 +45,7 @@ def load_summary(path: Path) -> pd.DataFrame:
 
 def detect_spin_columns(df: pd.DataFrame) -> Optional[Tuple[str, str]]:
     """
-    Try to infer inbound/outbound spin column names by substring matching.
+    Try to infer inbound and outbound spin column names by substring matching.
     Returns (spin_in_col, spin_out_col) or None if not found.
     """
     spin_in_candidates = [c for c in df.columns if "spin_in" in c]
@@ -63,7 +64,7 @@ def fit_grouped_linear_model(
 ) -> Tuple[LinearRegression, pd.DataFrame, np.ndarray]:
     """
     Fit a linear regression model:
-        outbound = f(inbound, one-hot(group))
+        outbound = f(inbound, one hot encoded group)
 
     Returns:
         model, X_design (encoded), y_true
@@ -75,7 +76,6 @@ def fit_grouped_linear_model(
 
     print(f"\nFitting model for '{outbound_col}' using {len(sub)} shots.")
 
-    # One-hot encode group, keep all columns (no drop_first).
     enc = pd.get_dummies(sub[["group", inbound_col]], columns=["group"])
 
     X = enc.values
@@ -84,7 +84,6 @@ def fit_grouped_linear_model(
     model = LinearRegression()
     model.fit(X, y)
 
-    # Attach feature names for later
     enc["_target_"] = y
     return model, enc.drop(columns=["_target_"]), y
 
@@ -97,7 +96,7 @@ def plot_pred_vs_actual(
     xlabel: str,
     ylabel: str,
 ) -> None:
-    """Scatter plot of predicted vs actual with y = x reference line."""
+    """Scatter plot of predicted vs actual with y equal x reference line."""
     fig, ax = plt.subplots(figsize=(6, 6))
 
     ax.scatter(y_true, y_pred, alpha=0.7, s=40)
@@ -122,7 +121,7 @@ def print_model_equation(
     inbound_col: str,
     outbound_name: str,
 ) -> None:
-    """Print a readable equation outbound ≈ a*inbound + group terms + b."""
+    """Print a readable equation outbound ≈ a*inbound plus group terms plus b."""
     feature_names = list(feature_df.columns)
     coef = model.coef_
     intercept = model.intercept_
@@ -150,7 +149,7 @@ def make_user_prediction(
     group_value: str,
 ) -> float:
     """
-    Build a single-row design matrix matching the training encoding and
+    Build a single row design matrix matching the training encoding and
     return model prediction.
     """
     df_row = pd.DataFrame(
@@ -173,7 +172,7 @@ def interactive_loop(
     speed_in_col: str,
     spin_in_col: Optional[str],
 ) -> None:
-    """Console-based prediction helper with a small 'popup style' menu."""
+    """Console based prediction helper with a small menu style header."""
     speed_features = list(speed_feature_df.columns)
     spin_features = list(spin_feature_df.columns) if spin_feature_df is not None else []
 
@@ -278,7 +277,7 @@ def eval_and_plot_from_rows(
     quantity_label: str,
 ) -> None:
     """
-    Use make_user_prediction on each row of df (inbound + group) and
+    Use make_user_prediction on each row of df (inbound plus group) and
     compare predicted outbound against actual outbound.
 
     Produces a predicted vs actual scatter plot, coloured by group.
@@ -350,10 +349,8 @@ def plot_in_vs_out_with_model(
 ) -> None:
     """
     Plot inbound vs outbound for each group:
-        - scatter: actual outbound vs inbound
-        - line: model prediction over a dense grid of inbound values
-
-    This uses many inbound values per group to show the regression trend.
+        scatter for actual outbound vs inbound
+        line for model prediction over a dense grid of inbound values
     """
     sub = df[["group", inbound_col, outbound_col]].copy()
     sub[inbound_col] = pd.to_numeric(sub[inbound_col], errors="coerce")
@@ -369,7 +366,6 @@ def plot_in_vs_out_with_model(
         if g_sub.empty:
             continue
 
-        # scatter actual
         ax.scatter(
             g_sub[inbound_col],
             g_sub[outbound_col],
@@ -379,10 +375,12 @@ def plot_in_vs_out_with_model(
             label=f"{g} actual",
         )
 
-        # dense grid of inbound values for this group
         x_min = float(g_sub[inbound_col].min())
         x_max = float(g_sub[inbound_col].max())
-        x_grid = np.linspace(x_min, x_max, 200)
+        if np.isclose(x_min, x_max):
+            x_grid = np.linspace(x_min - 0.2, x_max + 0.2, 50)
+        else:
+            x_grid = np.linspace(x_min, x_max, 200)
 
         y_grid = [
             make_user_prediction(
@@ -423,9 +421,7 @@ def main() -> None:
     df = load_summary(SUMMARY_CSV)
     print(f"Loaded {len(df)} rows from {SUMMARY_CSV}")
 
-    # -----------------------
     # 1. SPEED MODEL
-    # -----------------------
     speed_in_col = "speed_in_mps"
     speed_out_col = "speed_out_mps"
     if speed_in_col not in df.columns or speed_out_col not in df.columns:
@@ -444,14 +440,12 @@ def main() -> None:
         y_true=y_speed,
         y_pred=y_speed_pred,
         title="Outbound speed: predicted vs actual (all groups)",
-        out_path=BASE_OUTPUT / "speed_pred_vs_actual.png",
+        out_path=MODEL_PLOTS / "speed_pred_vs_actual.png",
         xlabel="Actual outbound speed (m/s)",
         ylabel="Predicted outbound speed (m/s)",
     )
 
-    # -----------------------
     # 2. SPIN MODEL (optional)
-    # -----------------------
     spin_model: Optional[LinearRegression] = None
     spin_features_df: Optional[pd.DataFrame] = None
     spin_in_col: Optional[str] = None
@@ -478,14 +472,12 @@ def main() -> None:
             y_true=y_spin,
             y_pred=y_spin_pred,
             title="Outbound spin: predicted vs actual (all groups)",
-            out_path=BASE_OUTPUT / "spin_pred_vs_actual.png",
+            out_path=MODEL_PLOTS / "spin_pred_vs_actual.png",
             xlabel="Actual outbound spin (rad/s)",
             ylabel="Predicted outbound spin (rad/s)",
         )
 
-    # -----------------------
     # 3. Interactive prediction
-    # -----------------------
     interactive_loop(
         speed_model=speed_model,
         speed_feature_df=speed_features_df,
@@ -495,9 +487,7 @@ def main() -> None:
         spin_in_col=spin_in_col,
     )
 
-    # -----------------------
-    # 4. Evaluate model per row and plot predicted vs actual by group
-    # -----------------------
+    # 4. Evaluate per row and plot predicted vs actual by group
     speed_feature_cols = list(speed_features_df.columns)
     eval_and_plot_from_rows(
         df=df,
@@ -505,7 +495,7 @@ def main() -> None:
         outbound_col=speed_out_col,
         model=speed_model,
         feature_cols=speed_feature_cols,
-        out_path=BASE_OUTPUT / "speed_pred_vs_actual_by_group.png",
+        out_path=MODEL_PLOTS / "speed_pred_vs_actual_by_group.png",
         title="Outbound speed: predicted vs actual (by group)",
         quantity_label="speed (m/s)",
     )
@@ -518,22 +508,20 @@ def main() -> None:
             outbound_col=spin_out_col,
             model=spin_model,
             feature_cols=spin_feature_cols,
-            out_path=BASE_OUTPUT / "spin_pred_vs_actual_by_group.png",
+            out_path=MODEL_PLOTS / "spin_pred_vs_actual_by_group.png",
             title="Outbound spin: predicted vs actual (by group)",
             quantity_label="spin (rad/s)",
         )
 
-    # -----------------------
     # 5. Inbound vs outbound with dense model curves
-    # -----------------------
     plot_in_vs_out_with_model(
         df=df,
         inbound_col=speed_in_col,
         outbound_col=speed_out_col,
         model=speed_model,
         feature_cols=speed_feature_cols,
-        out_path=BASE_OUTPUT / "speed_in_vs_out_with_model.png",
-        title="Inbound vs outbound speed with group-specific models",
+        out_path=MODEL_PLOTS / "speed_in_vs_out_with_model.png",
+        title="Inbound vs outbound speed with group specific models",
         xlabel="Inbound speed (m/s)",
         ylabel="Outbound speed (m/s)",
     )
@@ -546,13 +534,13 @@ def main() -> None:
             outbound_col=spin_out_col,
             model=spin_model,
             feature_cols=spin_feature_cols,
-            out_path=BASE_OUTPUT / "spin_in_vs_out_with_model.png",
-            title="Inbound vs outbound spin with group-specific models",
+            out_path=MODEL_PLOTS / "spin_in_vs_out_with_model.png",
+            title="Inbound vs outbound spin with group specific models",
             xlabel="Inbound spin (rad/s)",
             ylabel="Outbound spin (rad/s)",
         )
 
-    print("\nSaved all regression plots and evaluations.")
+    print(f"\nSaved all regression plots to {MODEL_PLOTS.resolve()}.")
 
 
 if __name__ == "__main__":
