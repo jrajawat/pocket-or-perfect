@@ -29,10 +29,92 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 BASE_OUTPUT = Path("outputs")
 MODEL_PLOTS = BASE_OUTPUT / "model_plots"
 SUMMARY_CSV = BASE_OUTPUT / "spikeball_velocity_summary.csv"
+R2_TABLE_CSV = BASE_OUTPUT / "model_plots" / "model_r2_table.csv"
+
+def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    mae = float(mean_absolute_error(y_true, y_pred))
+    # R^2 is 1 - SSE/SST, but we can reuse sklearn's model.score too
+    # Here we compute directly to not depend on the model object.
+    sse = float(np.sum((y_true - y_pred) ** 2))
+    sst = float(np.sum((y_true - np.mean(y_true)) ** 2))
+    r2 = float(1.0 - sse / sst) if sst > 0 else float("nan")
+    return {"r2": r2, "rmse": rmse, "mae": mae, "n": int(len(y_true))}
+
+
+def save_metrics_table(rows: list[dict], out_path: Path) -> None:
+    dfm = pd.DataFrame(rows)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    dfm.to_csv(out_path, index=False)
+
+    # nice console print
+    display_cols = ["target", "r2", "rmse", "mae", "n"]
+    print("\nModel accuracy table:")
+    print(dfm[display_cols].to_string(index=False, float_format=lambda x: f"{x:0.4f}"))
+    print(f"\nSaved metrics table to {out_path}")
+
+def per_group_metrics(
+    df: pd.DataFrame,
+    inbound_col: str,
+    outbound_col: str,
+    model: LinearRegression,
+    feature_cols: list[str],
+) -> pd.DataFrame:
+    sub = df[["group", inbound_col, outbound_col]].copy()
+    sub[inbound_col] = pd.to_numeric(sub[inbound_col], errors="coerce")
+    sub[outbound_col] = pd.to_numeric(sub[outbound_col], errors="coerce")
+    sub = sub.dropna(subset=[inbound_col, outbound_col])
+
+    rows = []
+    for g in sorted(sub["group"].unique()):
+        g_sub = sub[sub["group"] == g]
+        if g_sub.empty:
+            continue
+
+        y_true = g_sub[outbound_col].to_numpy(dtype=float)
+        y_pred = []
+        for _, r in g_sub.iterrows():
+            y_pred.append(
+                make_user_prediction(
+                    model=model,
+                    feature_cols=feature_cols,
+                    inbound_col=inbound_col,
+                    inbound_value=float(r[inbound_col]),
+                    group_value=str(r["group"]),
+                )
+            )
+        y_pred = np.asarray(y_pred, dtype=float)
+
+        m = regression_metrics(y_true, y_pred)
+        rows.append(
+            {
+                "target": outbound_col,
+                "group": g,
+                "r2": m["r2"],
+                "rmse": m["rmse"],
+                "mae": m["mae"],
+                "n": m["n"],
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def save_group_metrics_table(dfm: pd.DataFrame, out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    dfm.to_csv(out_path, index=False)
+
+    if not dfm.empty:
+        print("\nPer-group model accuracy:")
+        print(dfm.to_string(index=False, float_format=lambda x: f"{x:0.4f}"))
+        print(f"\nSaved per-group metrics table to {out_path}")
 
 
 def load_summary(path: Path) -> pd.DataFrame:
@@ -500,6 +582,15 @@ def main() -> None:
         quantity_label="speed (m/s)",
     )
 
+    group_speed = per_group_metrics(
+        df=df,
+        inbound_col=speed_in_col,
+        outbound_col=speed_out_col,
+        model=speed_model,
+        feature_cols=list(speed_features_df.columns),
+    )
+    save_group_metrics_table(group_speed, MODEL_PLOTS / "model_metrics_by_group_speed.csv")
+
     if spin_model is not None and spin_features_df is not None and spin_in_col is not None and spin_out_col is not None:
         spin_feature_cols = list(spin_features_df.columns)
         eval_and_plot_from_rows(
@@ -512,6 +603,15 @@ def main() -> None:
             title="Outbound spin: predicted vs actual (by group)",
             quantity_label="spin (rad/s)",
         )
+        group_spin = per_group_metrics(
+            df=df,
+            inbound_col=spin_in_col,
+            outbound_col=spin_out_col,
+            model=spin_model,
+            feature_cols=list(spin_features_df.columns),
+        )
+        save_group_metrics_table(group_spin, MODEL_PLOTS / "model_metrics_by_group_spin.csv")
+
 
     # 5. Inbound vs outbound with dense model curves
     plot_in_vs_out_with_model(
@@ -541,6 +641,20 @@ def main() -> None:
         )
 
     print(f"\nSaved all regression plots to {MODEL_PLOTS.resolve()}.")
+
+    metrics_rows = []
+
+    # after speed model fit + y_speed_pred
+    m_speed = regression_metrics(y_speed, y_speed_pred)
+    metrics_rows.append({"target": "speed_out_mps", **m_speed})
+
+    # after spin model fit + y_spin_pred (only if spin model exists)
+    if spin_model is not None and spin_features_df is not None:
+        m_spin = regression_metrics(y_spin, y_spin_pred)
+        metrics_rows.append({"target": str(spin_out_col), **m_spin})
+
+    # at the end of main (after plots, before final print)
+    save_metrics_table(metrics_rows, R2_TABLE_CSV)
 
 
 if __name__ == "__main__":
